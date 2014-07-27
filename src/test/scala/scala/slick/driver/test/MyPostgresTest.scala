@@ -12,7 +12,6 @@ class MyPostgresTest extends DriverTest(MyPostgresTest.tdb)
 object MyPostgresTest {
 
   def tdb = new ExternalJdbcTestDB("mypostgres") {
-    type Driver = MyPostgresDriver.type
     val driver = MyPostgresDriver
     override def getLocalTables(implicit session: profile.Backend#Session) = {
       val tables = ResultSetInvoker[(String,String,String, String)](
@@ -25,6 +24,6 @@ object MyPostgresTest {
       tables.list.filter(_._4.toUpperCase == "SEQUENCE").map(_._3).sorted
     }
     override lazy val capabilities =
-      driver.capabilities + TestDB.plainSql + TestDB.plainSqlWide
+      driver.capabilities + TestDB.capabilities.plainSql
   }
 }

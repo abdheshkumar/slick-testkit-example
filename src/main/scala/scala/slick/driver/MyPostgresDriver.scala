@@ -8,6 +8,7 @@ import scala.slick.util.MacroSupport.macroSupportInterpolation
 import scala.slick.compiler.CompilerState
 import scala.slick.jdbc.meta.MTable
 import scala.slick.jdbc.{Invoker, JdbcType}
+import scala.slick.model.Model
 
 /** Slick driver for PostgreSQL.
   *
@@ -24,8 +25,39 @@ import scala.slick.jdbc.{Invoker, JdbcType}
   * </ul>
   */
 trait MyPostgresDriver extends JdbcDriver { driver =>
+  class ModelBuilder(mTables: Seq[MTable], ignoreInvalidDefaults: Boolean = true)(implicit session: Backend#Session) extends super.ModelBuilder(mTables, ignoreInvalidDefaults){
+    override def Table = new Table(_){
+      override def schema = super.schema.filter(_ != "public") // remove default schema
+      override def Column = new Column(_){
+        val VarCharPattern = "^'(.*)'::character varying$".r
+        val IntPattern = "^\\((-?[0-9]*)\\)$".r
+        override def default = meta.columnDef.map((_,tpe)).collect{
+          case ("true","Boolean")  => Some(Some(true))
+          case ("false","Boolean") => Some(Some(false))
+          case (VarCharPattern(str),"String") => Some(Some(str))
+          case (IntPattern(v),"Int") => Some(Some(v.toInt))
+          case (IntPattern(v),"Long") => Some(Some(v.toLong))
+          case ("NULL::character varying","String") => Some(None)
+        }.getOrElse{
+          val d = super.default
+          if(meta.nullable == Some(true) && d == None){
+            Some(None)
+          } else d
+        }
+      }
+      override def Index = new Index(_){
+        // FIXME: this needs a test
+        override def columns = super.columns.map(_.stripPrefix("\"").stripSuffix("\""))
+      }
+    }
+  }
 
-  override def getTables: Invoker[MTable] = MTable.getTables(None, None, None, Some(Seq("TABLE")))
+  override def defaultTables(implicit session: Backend#Session) = MTable.getTables(None, None, None, Some(Seq("TABLE"))).list
+
+  override def createModel(tables: Option[Seq[MTable]] = None, ignoreInvalidDefaults: Boolean = true)
+                          (implicit session: Backend#Session)
+                          : Model
+    = new ModelBuilder(tables.getOrElse(defaultTables), ignoreInvalidDefaults).model
 
   override val columnTypes = new JdbcTypes
   override def createQueryBuilder(n: Node, state: CompilerState): QueryBuilder = new QueryBuilder(n, state)
@@ -44,13 +76,12 @@ trait MyPostgresDriver extends JdbcDriver { driver =>
     override protected val concatOperator = Some("||")
     override protected val supportsEmptyJoinConditions = false
 
-    override protected def buildFetchOffsetClause(fetch: Option[Long], offset: Option[Long]) = (fetch, offset) match {
+    override protected def buildFetchOffsetClause(fetch: Option[Node], offset: Option[Node]) = (fetch, offset) match {
       case (Some(t), Some(d)) => b" limit $t offset $d"
       case (Some(t), None   ) => b" limit $t"
       case (None,    Some(d)) => b" offset $d"
       case _ =>
     }
-
     override def expr(n: Node, skipParens: Boolean = false) = n match {
       case Library.NextValue(SequenceNode(name)) => b"nextval('$name')"
       case Library.CurrentValue(SequenceNode(name)) => b"currval('$name')"
